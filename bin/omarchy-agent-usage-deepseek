@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""DeepSeek API balance and Claude Code token usage in Omarchy's agent record format."""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+import claude_stock
+
+
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+KEY_FILE = Path(os.environ.get("DEEPSEEK_KEY_FILE") or CONFIG / "deepseek/api_key")
+SETTINGS = CONFIG / "omarchy/agents/deepseek.json"
+BALANCE_URL = "https://api.deepseek.com/user/balance"
+AUTH_HELP = f"Put your DeepSeek API key in {KEY_FILE} or set DEEPSEEK_API_KEY."
+
+
+class UsageError(Exception):
+    pass
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward the API key to a redirect destination.
+        raise UsageError("DeepSeek redirected the balance request.")
+
+
+def api_key():
+    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not key:
+        try:
+            key = "".join(KEY_FILE.read_text().split())
+        except OSError:
+            pass
+    if not key:
+        raise UsageError(AUTH_HELP)
+    return key
+
+
+def amount(value):
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def funded_amount():
+    # Optional, as for Fireworks: credits bought, so the panel can draw a meter
+    # and a spent-of-funded line. The API only reports what is left.
+    try:
+        settings = json.loads(SETTINGS.read_text())
+    except (OSError, ValueError):
+        return None
+    funded = amount(settings.get("fundedAmount")) if isinstance(settings, dict) else None
+    return funded if funded else None
+
+
+def fetch_balance(key):
+    req = urllib.request.Request(BALANCE_URL, headers={"Authorization": "Bearer " + key, "Accept": "application/json"})
+    try:
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=10) as response:
+            payload = json.load(response)
+        if not isinstance(payload, dict):
+            raise ValueError()
+        return payload
+    except urllib.error.HTTPError as error:
+        if error.code == 401:
+            raise UsageError("DeepSeek rejected the API key.") from None
+        raise UsageError(f"DeepSeek returned HTTP {error.code}.") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise UsageError("Could not reach the DeepSeek API.") from None
+    except ValueError:
+        raise UsageError("DeepSeek returned an invalid balance response.") from None
+
+
+def balance(payload, funded=None):
+    infos = [info for info in payload.get("balance_infos") or [] if isinstance(info, dict)]
+    # An account holds one ledger per currency; show the one with money in it.
+    infos.sort(key=lambda info: amount(info.get("total_balance")) or 0, reverse=True)
+    if not infos or amount(infos[0].get("total_balance")) is None:
+        raise UsageError("DeepSeek returned an invalid balance response.")
+    remaining = amount(infos[0]["total_balance"])
+    result = {"remaining": float(remaining), "funded": 0.0, "spent": 0.0,
+              "currency": str(infos[0].get("currency") or "USD").upper(), "estimated": False}
+    if funded:
+        result.update(funded=float(funded), spent=float(max(Decimal(0), funded - remaining)))
+    return result
+
+
+def stats(force, limits_only):
+    # Same cache ages as the stock Claude collector.
+    age = 0 if force else (900 if limits_only else 20)
+    try:
+        stock = claude_stock.load(claude_stock.is_deepseek, "deepseek")
+        return stock.cached_scan(stock.config_dir() / "projects", age)
+    except Exception as error:
+        print(f"omarchy-agent-usage-deepseek: transcript scan skipped ({type(error).__name__})", file=sys.stderr)
+        return {}
+
+
+def collect(force=False, limits_only=False):
+    record = {"schemaVersion": 1, "id": "deepseek", "name": "DeepSeek", "tierLabel": "Prepaid",
+              "updatedAt": datetime.now(timezone.utc).isoformat(), "hasLocalStats": True,
+              "usageStatusText": "", "authHelpText": "", "limits": [],
+              "todayPrompts": 0, "todaySessions": 0, "todayTotalTokens": 0, "todayTokensByModel": {},
+              "recentDays": [], "totalPrompts": 0, "totalSessions": 0, "activeDays": 0,
+              "activeDates": [], "modelUsage": {}}
+    record.update(stats(force, limits_only))
+    try:
+        payload = fetch_balance(api_key())
+        record["balance"] = balance(payload, funded_amount())
+        if payload.get("is_available") is False:
+            record.update(usageStatusText="Balance too low for API calls",
+                          authHelpText="Top up at platform.deepseek.com.")
+    except UsageError as error:
+        record.update(usageStatusText="DeepSeek balance unavailable", authHelpText=str(error))
+    record["ready"] = "balance" in record or int(record.get("totalPrompts") or 0) > 0
+    return record
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--limits-only", action="store_true")
+    args = parser.parse_args()
+    print(json.dumps(collect(args.force, args.limits_only), separators=(",", ":")))

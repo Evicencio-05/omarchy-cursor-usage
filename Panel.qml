@@ -165,6 +165,7 @@ Panel {
     if (code === "USD") return "$"
     if (code === "EUR") return "€"
     if (code === "GBP") return "£"
+    if (code === "CNY") return "¥"
     return code + " "
   }
 

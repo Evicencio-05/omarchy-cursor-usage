@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "darkosxl.agents-cursor",
   "name": "Agents + Cursor",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "author": "Darkosxl",
   "license": "MIT",
-  "description": "The native Omarchy agents panel with a Cursor tab and the same refresh lifecycle.",
+  "description": "The native Omarchy agents panel with Cursor and DeepSeek tabs and the same refresh lifecycle.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Agents + Cursor",
-    "description": "The native Omarchy agents panel with a Cursor tab and the same refresh lifecycle.",
+    "description": "The native Omarchy agents panel with Cursor and DeepSeek tabs and the same refresh lifecycle.",
     "category": "AI",
     "aliases": [
       "agents",
@@ -34,6 +34,9 @@
           "enabled": true
         },
         "cursor": {
+          "enabled": true
+        },
+        "deepseek": {
           "enabled": true
         }
       },

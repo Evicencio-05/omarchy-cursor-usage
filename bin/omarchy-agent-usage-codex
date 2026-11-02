@@ -1,0 +1,75 @@
+#!/usr/bin/python3
+"""Omarchy's Codex collector, reading limits without the stalling account/read call."""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+STOCK = Path(os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy") / "bin/omarchy-agent-usage-codex"
+REQUIRED = ("main", "find_command", "rpc_request", "limit_window", "ENV", "AUTH_HELP")
+
+
+def load_stock():
+    # Session scanning, caching and record assembly stay Omarchy's; only the
+    # limits probe is replaced.
+    loader = importlib.machinery.SourceFileLoader("omarchy_codex_usage", str(STOCK))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    stock = importlib.util.module_from_spec(spec)
+    loader.exec_module(stock)
+    if not all(hasattr(stock, name) for name in REQUIRED):
+        raise AttributeError("unsupported stock Codex collector")
+    return stock
+
+
+def rate_limits(stock):
+    # Codex's app-server can leave account/read unanswered indefinitely, and
+    # the stock probe waits on it before asking for limits. rateLimits/read
+    # answers on its own and carries the plan type as well.
+    result = {"limits": [], "tierLabel": "", "usageStatusText": "", "authHelpText": stock.AUTH_HELP}
+    codex = stock.find_command("codex")
+    if not codex:
+        result.update(usageStatusText="Codex unavailable", authHelpText="codex not found in PATH")
+        return result
+    try:
+        proc = subprocess.Popen(
+            [codex, "-s", "read-only", "-a", "on-request", "app-server"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, env=stock.ENV,
+        )
+    except Exception as error:
+        result.update(usageStatusText="Codex unavailable", authHelpText=str(error))
+        return result
+    try:
+        stock.rpc_request(proc, 1, "initialize", {"clientInfo": {"name": "omarchy-agent-usage", "version": "1"}}, timeout=8)
+        proc.stdin.write(json.dumps({"method": "initialized", "params": {}}) + "\n")
+        proc.stdin.flush()
+        message = stock.rpc_request(proc, 2, "account/rateLimits/read", timeout=8)
+        limits = (message.get("result") or {}).get("rateLimits") or {}
+        result["tierLabel"] = str(limits.get("planType") or "")
+        for window in (limits.get("primary"), limits.get("secondary")):
+            entry = stock.limit_window(window)
+            if entry:
+                result["limits"].append(entry)
+    except Exception as error:
+        result.update(usageStatusText="Codex limits unavailable", authHelpText=str(error))
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=1)
+        except Exception:
+            proc.kill()
+    return result
+
+
+if __name__ == "__main__":
+    try:
+        stock = load_stock()
+    except Exception:
+        # An Omarchy release this wrapper does not understand still collects.
+        os.execv(str(STOCK), [str(STOCK), *sys.argv[1:]])
+    stock.fetch_codex_rpc = lambda: rate_limits(stock)
+    stock.main()

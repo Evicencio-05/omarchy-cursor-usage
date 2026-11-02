@@ -1,5 +1,17 @@
 # Implementation record
 
+## 0.1.4
+
+- Added a DeepSeek tab. Its collector reads the live prepaid balance from `https://api.deepseek.com/user/balance` with the key from `DEEPSEEK_API_KEY` or `~/.config/deepseek/api_key`. An optional `fundedAmount` in `~/.config/omarchy/agents/deepseek.json` adds the meter. Token stats come from Claude Code transcripts whose model starts with `deepseek`.
+- Added a Claude collector wrapper that excludes those `deepseek-*` transcripts, so DeepSeek tokens no longer count toward the Claude tab. Both collectors load Omarchy's installed Claude collector through `bin/claude_stock.py` and filter its transcript scan by model, each with its own cache file. With a stock Claude collector the wrapper does not recognize, it runs the stock collector unmodified.
+- CNY balances display with `¥`. The DeepSeek mark comes from the MIT-licensed LobeHub icon set.
+- Live check on 2026-11-02: the DeepSeek record showed a $4.95 balance and `deepseek-flash` tokens; the Claude record kept its limits and no longer listed `deepseek-flash`.
+
+## 0.1.3
+
+- Added a Codex collector wrapper. Codex 0.166's app-server intermittently left `account/read` unanswered, so the stock collector reported "Codex limits unavailable" (4 of 5, then 2 of 3, back-to-back runs on 2026-11-01). A record with no limits and no recent sessions hid the Codex tab. The wrapper reuses the installed collector's scanning, caching and record assembly, and reads limits and plan from `account/rateLimits/read` alone. It returned limits on 8 of 8 back-to-back live runs, in about 0.5 s each.
+- The updater passes `--except codex` to the stock updater only when an installed Codex collector exists. The Cursor and Codex records are written concurrently through the same validated atomic write.
+
 ## 0.1.2
 
 - Added Cursor's cube mark as the tab icon, with light and dark variants matching the Codex icon. The SVG path comes from the MIT-licensed LobeHub icon set.

@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+"""Omarchy's Claude collector, leaving DeepSeek-model transcripts to the DeepSeek tab."""
+import os
+import sys
+
+import claude_stock
+
+
+if __name__ == "__main__":
+    try:
+        stock = claude_stock.load(lambda model: not claude_stock.is_deepseek(model), "no-deepseek")
+    except Exception:
+        # An Omarchy release this wrapper does not understand still collects.
+        os.execv(str(claude_stock.STOCK), [str(claude_stock.STOCK), *sys.argv[1:]])
+    raise SystemExit(stock.main())
